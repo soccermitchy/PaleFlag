@@ -1,36 +1,44 @@
 ﻿using System.Collections.Generic;
 
-namespace PaleFlag {
-	public interface IHandle {
-		uint Handle { get; set; }
-		void Close();
-	}
-	
-	public class HandleManager {
-		uint HandleIter;
-		readonly Dictionary<uint, IHandle> Handles = new Dictionary<uint,IHandle>();
+namespace PaleFlag
+{
+    public interface IHandle
+    {
+        uint Handle { get; set; }
+        void Close();
+    }
 
-		public T Get<T>(uint handle) where T : IHandle => (T) Handles[handle]; 
+    public class HandleManager
+    {
+        uint HandleIter;
+        readonly Dictionary<uint, IHandle> Handles = new Dictionary<uint, IHandle>();
 
-		public uint Add(IHandle obj) {
-			lock(this) {
-				Handles[++HandleIter] = obj;
-				obj.Handle = HandleIter;
-				return HandleIter;
-			}
-		}
+        public T Get<T>(uint handle) where T : IHandle => (T)Handles[handle];
 
-		public T Register<T>(T obj) where T : IHandle {
-			Add(obj);
-			return obj;
-		}
+        public uint Add(IHandle obj)
+        {
+            lock (this)
+            {
+                Handles[++HandleIter] = obj;
+                obj.Handle = HandleIter;
+                return HandleIter;
+            }
+        }
 
-		public void Close(uint handle) {
-			lock(this) {
-				if(!Handles.ContainsKey(handle)) return;
-				Handles[handle].Close();
-				Handles.Remove(handle);
-			}
-		}
-	}
+        public T Register<T>(T obj) where T : IHandle
+        {
+            Add(obj);
+            return obj;
+        }
+
+        public void Close(uint handle)
+        {
+            lock (this)
+            {
+                if (!Handles.ContainsKey(handle)) return;
+                Handles[handle].Close();
+                Handles.Remove(handle);
+            }
+        }
+    }
 }

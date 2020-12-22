@@ -1,199 +1,229 @@
-﻿using System;
+﻿using MoreLinq;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
-using MoreLinq;
 using static System.Console;
 
-namespace PaleFlag {
-	public unsafe class PageManager {
-		public static PageManager Instance;
-		
-		readonly CpuCore Cpu;
-		readonly byte*[] PhysBlocks = new byte*[240];
-		readonly bool[] PhysPages = new bool[960 * 1024], VirtPages = new bool[1024 * 1024];
-		readonly Dictionary<uint, int>
-			FreePhysPages = new Dictionary<uint, int> { [0x1000] = 960 * 1024 }, 
-			FreeVirtPages = new Dictionary<uint, int> { [0x1000] = 960 * 1024 };
+namespace PaleFlag
+{
+    public unsafe class PageManager
+    {
+        public static PageManager Instance;
 
-		public PageManager(CpuCore cpu) {
-			Instance = this;
-			Cpu = cpu;
-		}
+        readonly CpuCore Cpu;
+        readonly byte*[] PhysBlocks = new byte*[240];
+        readonly bool[] PhysPages = new bool[960 * 1024], VirtPages = new bool[1024 * 1024];
+        readonly Dictionary<uint, int>
+            FreePhysPages = new Dictionary<uint, int> { [0x1000] = 960 * 1024 },
+            FreeVirtPages = new Dictionary<uint, int> { [0x1000] = 960 * 1024 };
 
-		void AllocPhysBlocks(uint addr, int count) {
-			var saddr = addr >> 24;
-			addr = saddr << 24;
-			void DoAlloc(int off, int pcount) {
-				WriteLine($"\tAllocating {pcount} physical blocks for {(saddr + off) << 24:X}");
-				var blockBase = (uint) (addr + 16 * 1024 * 1024 * off);
-				var ptr = Cpu.CreatePhysicalPages(blockBase, pcount);
-				for(var k = 0; k < pcount; ++k)
-					PhysBlocks[saddr + off + k] = ptr + 16 * 1024 * 1024 * k;
-			}
-			
-			var ccount = 0;
-			for(var i = 0; i < count; ++i) {
-				if(PhysBlocks[i] == (byte*) 0) {
-					ccount++;
-					continue;
-				}
-				if(ccount == 0) continue;
-				
-				DoAlloc(i - ccount, ccount);
-				ccount = 0;
-			}
-			
-			if(ccount != 0)
-				DoAlloc(count - ccount, ccount);
-		}
+        public PageManager(CpuCore cpu)
+        {
+            Instance = this;
+            Cpu = cpu;
+        }
 
-		public uint AllocPhysPages(int count) {
-			var addr = AllocPages(count, PhysPages, FreePhysPages);
-			AllocPhysBlocks(addr, (count & 0xFFF) != 0 ? count / 4096 + 1 : count / 4096);
-			return addr;
-		}
+        void AllocPhysBlocks(uint addr, int count)
+        {
+            var saddr = addr >> 24;
+            addr = saddr << 24;
+            void DoAlloc(int off, int pcount)
+            {
+                WriteLine($"\tAllocating {pcount} physical blocks for {(saddr + off) << 24:X}");
+                var blockBase = (uint)(addr + 16 * 1024 * 1024 * off);
+                var ptr = Cpu.CreatePhysicalPages(blockBase, pcount);
+                for (var k = 0; k < pcount; ++k)
+                    PhysBlocks[saddr + off + k] = ptr + 16 * 1024 * 1024 * k;
+            }
 
-		public uint AllocVirtPages(int count, uint? min = null, uint? max = null, uint? at = null) {
-			if(at != null) {
-				min = at;
-				max = (uint) (at + count * 4096);
-			}
-			return AllocPages(count, VirtPages, FreeVirtPages, min, max);
-		}
+            var ccount = 0;
+            for (var i = 0; i < count; ++i)
+            {
+                if (PhysBlocks[i] == (byte*)0)
+                {
+                    ccount++;
+                    continue;
+                }
+                if (ccount == 0) continue;
 
-		uint AllocPages(int count, bool[] resident, Dictionary<uint, int> free, uint? min = null, uint? max = null) {
-			void SetFree(uint addr, int pages) {
-				WriteLine($"Adding block at {addr:X8} with {pages} pages");
-				free[addr] = pages;
-			}
-			
-			WriteLine($"Finding allocation block in {(resident == VirtPages ? "virtual" : "physical")} memory for {count} pages -- min={min:X} max={max:X}");
-			var block = free.Where(x => x.Value >= count && (min == null || x.Key >= min || x.Key + x.Value * 4096U >= min + count * 4096) && (max == null || x.Key + count * 4096 <= max)).OrderBy(x => x.Value).First();
-			WriteLine($"Found block in which to allocate: {block.Value} pages at {block.Key:X8}");
-			free.Remove(block.Key);
-			var start = block.Key;
-			if(block.Value > count) {
-				if(min == null || block.Key == min)
-					SetFree((uint) (block.Key + 4096 * count), block.Value - count);
-				else {
-					var off = (min.Value - block.Key) / 4096;
-					if(off + count < block.Value)
-						SetFree((uint) (block.Key + (off + count) * 4096), (int) (block.Value - off - count));
-					SetFree(block.Key, (int) off);
-					start += off * 4096;
-				}
-			}
+                DoAlloc(i - ccount, ccount);
+                ccount = 0;
+            }
 
-			var sbase = start >> 12;
-			for(var i = 0; i < count; ++i)
-				resident[sbase + i] = true;
-			
-			return start;
-		}
+            if (ccount != 0)
+                DoAlloc(count - ccount, ccount);
+        }
 
-		public void ReleasePhysPages(uint addr, int count) => ReleasePages(addr, count, PhysPages, FreePhysPages);
-		public void ReleaseVirtPages(uint addr, int count) => ReleasePages(addr, count, VirtPages, FreeVirtPages);
+        public uint AllocPhysPages(int count)
+        {
+            var addr = AllocPages(count, PhysPages, FreePhysPages);
+            AllocPhysBlocks(addr, (count & 0xFFF) != 0 ? count / 4096 + 1 : count / 4096);
+            return addr;
+        }
 
-		void ReleasePages(uint addr, int count, bool[] resident, Dictionary<uint, int> free) {
-			void SetFree(uint _addr, int pages) {
-				WriteLine($"Adding block at {_addr:X8} with {pages} pages");
-				free[_addr] = pages;
-			}
-			
-			WriteLine($"Releasing {count} pages at {addr:X8} in {(resident == VirtPages ? "virtual" : "physical")} memory");
-			var adjacent = free.Where(x => x.Key == addr + count * 4096 || x.Key + x.Value * 4096 == addr).ToList();
-			adjacent.ForEach(x => free.Remove(x.Key));
-			var sbase = addr >> 12;
-			for(var i = 0; i < count; ++i)
-				resident[sbase + i] = false;
-			if(adjacent.Count == 0) {
-				SetFree(addr, count);
-				return;
-			}
-			WriteLine($"Found {adjacent.Count} adjacent blocks");
-			adjacent.Add(new KeyValuePair<uint, int>(addr, count));
-			SetFree(adjacent.Select(x => x.Key).Aggregate(Math.Min), adjacent.Select(x => x.Value).Sum());
-		}
+        public uint AllocVirtPages(int count, uint? min = null, uint? max = null, uint? at = null)
+        {
+            if (at != null)
+            {
+                min = at;
+                max = (uint)(at + count * 4096);
+            }
+            return AllocPages(count, VirtPages, FreeVirtPages, min, max);
+        }
 
-		public byte[] Read(uint vaddr, int size) {
-			var data = new byte[size];
-			Read(vaddr, data);
-			return data;
-		}
+        uint AllocPages(int count, bool[] resident, Dictionary<uint, int> free, uint? min = null, uint? max = null)
+        {
+            void SetFree(uint addr, int pages)
+            {
+                WriteLine($"Adding block at {addr:X8} with {pages} pages");
+                free[addr] = pages;
+            }
 
-		public void Read(uint vaddr, byte[] data) {
-			var prevPage = 0xFFFFFFFFU;
-			var physPage = 0U;
-			for(var i = 0U; i < data.Length; ++i) {
-				var page = (vaddr + i) & 0xFFFFF000U;
-				if(page != prevPage) {
-					prevPage = page;
-					physPage = Cpu.Virt2Phys(page);
-				}
-				data[i] = ReadPhys(physPage + (vaddr + i - page));
-			}
-		}
+            WriteLine($"Finding allocation block in {(resident == VirtPages ? "virtual" : "physical")} memory for {count} pages -- min={min:X} max={max:X}");
+            var block = free.Where(x => x.Value >= count && (min == null || x.Key >= min || x.Key + x.Value * 4096U >= min + count * 4096) && (max == null || x.Key + count * 4096 <= max)).OrderBy(x => x.Value).First();
+            WriteLine($"Found block in which to allocate: {block.Value} pages at {block.Key:X8}");
+            free.Remove(block.Key);
+            var start = block.Key;
+            if (block.Value > count)
+            {
+                if (min == null || block.Key == min)
+                    SetFree((uint)(block.Key + 4096 * count), block.Value - count);
+                else
+                {
+                    var off = (min.Value - block.Key) / 4096;
+                    if (off + count < block.Value)
+                        SetFree((uint)(block.Key + (off + count) * 4096), (int)(block.Value - off - count));
+                    SetFree(block.Key, (int)off);
+                    start += off * 4096;
+                }
+            }
 
-		public T Read<T>(uint vaddr) {
-			var data = Read(vaddr, Marshal.SizeOf<T>());
-			var handle = GCHandle.Alloc(data, GCHandleType.Pinned);
-			var ret = Marshal.PtrToStructure<T>(handle.AddrOfPinnedObject());
-			handle.Free();
-			return ret;
-		}
+            var sbase = start >> 12;
+            for (var i = 0; i < count; ++i)
+                resident[sbase + i] = true;
 
-		public void Write<T>(uint vaddr, T value) {
-			var size = Marshal.SizeOf<T>();
-			var data = new byte[size];
+            return start;
+        }
 
-			var handle = GCHandle.Alloc(data, GCHandleType.Pinned);
-			Marshal.StructureToPtr(value, handle.AddrOfPinnedObject(), true);
-			handle.Free();
-			
-			Write(vaddr, data);
-		}
+        public void ReleasePhysPages(uint addr, int count) => ReleasePages(addr, count, PhysPages, FreePhysPages);
+        public void ReleaseVirtPages(uint addr, int count) => ReleasePages(addr, count, VirtPages, FreeVirtPages);
 
-		public void Write(uint vaddr, byte[] data) {
-			var prevPage = 0xFFFFFFFFU;
-			var physPage = 0U;
-			for(var i = 0U; i < data.Length; ++i) {
-				var page = (vaddr + i) & 0xFFFFF000U;
-				if(page != prevPage) {
-					prevPage = page;
-					physPage = Cpu.Virt2Phys(page);
-					//WriteLine($"Physical page {physPage:X} for {page:X}");
-				}
-				WritePhys(physPage + (vaddr + i - page), data[i]);
-			}
-		}
+        void ReleasePages(uint addr, int count, bool[] resident, Dictionary<uint, int> free)
+        {
+            void SetFree(uint _addr, int pages)
+            {
+                WriteLine($"Adding block at {_addr:X8} with {pages} pages");
+                free[_addr] = pages;
+            }
 
-		public void Write<T>(uint vaddr, T[] value) {
-			var size = (uint) Marshal.SizeOf<T>();
-			for(var i = 0U; i < value.Length; ++i)
-				Write(vaddr + size * i, value[i]);
-		}
+            WriteLine($"Releasing {count} pages at {addr:X8} in {(resident == VirtPages ? "virtual" : "physical")} memory");
+            var adjacent = free.Where(x => x.Key == addr + count * 4096 || x.Key + x.Value * 4096 == addr).ToList();
+            adjacent.ForEach(x => free.Remove(x.Key));
+            var sbase = addr >> 12;
+            for (var i = 0; i < count; ++i)
+                resident[sbase + i] = false;
+            if (adjacent.Count == 0)
+            {
+                SetFree(addr, count);
+                return;
+            }
+            WriteLine($"Found {adjacent.Count} adjacent blocks");
+            adjacent.Add(new KeyValuePair<uint, int>(addr, count));
+            SetFree(adjacent.Select(x => x.Key).Aggregate(Math.Min), adjacent.Select(x => x.Value).Sum());
+        }
 
-		public byte ReadPhys(uint paddr) {
-			var blockNum = paddr >> 24;
-			var blockBase = blockNum << 24;
-			Debug.Assert(PhysBlocks[blockNum] != (byte*) 0);
-			return PhysBlocks[blockNum][paddr - blockBase];
-		}
+        public byte[] Read(uint vaddr, int size)
+        {
+            var data = new byte[size];
+            Read(vaddr, data);
+            return data;
+        }
 
-		public void WritePhys(uint paddr, byte value) {
-			//WriteLine($"Writing {value:X} to guest physical {paddr:X8}");
-			var blockNum = paddr >> 24;
-			var blockBase = blockNum << 24;
-			//WriteLine($"Physical block {blockNum} with base {blockBase:X}");
-			Debug.Assert(PhysBlocks[blockNum] != (byte*) 0);
-			PhysBlocks[blockNum][paddr - blockBase] = value;
-		}
+        public void Read(uint vaddr, byte[] data)
+        {
+            var prevPage = 0xFFFFFFFFU;
+            var physPage = 0U;
+            for (var i = 0U; i < data.Length; ++i)
+            {
+                var page = (vaddr + i) & 0xFFFFF000U;
+                if (page != prevPage)
+                {
+                    prevPage = page;
+                    physPage = Cpu.Virt2Phys(page);
+                }
+                data[i] = ReadPhys(physPage + (vaddr + i - page));
+            }
+        }
 
-		public void WritePhys(uint paddr, byte[] value) {
-			for(var i = 0U; i < value.Length; ++i)
-				WritePhys(paddr + i, value[i]);
-		}
-	}
+        public T Read<T>(uint vaddr)
+        {
+            var data = Read(vaddr, Marshal.SizeOf<T>());
+            var handle = GCHandle.Alloc(data, GCHandleType.Pinned);
+            var ret = Marshal.PtrToStructure<T>(handle.AddrOfPinnedObject());
+            handle.Free();
+            return ret;
+        }
+
+        public void Write<T>(uint vaddr, T value)
+        {
+            var size = Marshal.SizeOf<T>();
+            var data = new byte[size];
+
+            var handle = GCHandle.Alloc(data, GCHandleType.Pinned);
+            Marshal.StructureToPtr(value, handle.AddrOfPinnedObject(), true);
+            handle.Free();
+
+            Write(vaddr, data);
+        }
+
+        public void Write(uint vaddr, byte[] data)
+        {
+            var prevPage = 0xFFFFFFFFU;
+            var physPage = 0U;
+            for (var i = 0U; i < data.Length; ++i)
+            {
+                var page = (vaddr + i) & 0xFFFFF000U;
+                if (page != prevPage)
+                {
+                    prevPage = page;
+                    physPage = Cpu.Virt2Phys(page);
+                    //WriteLine($"Physical page {physPage:X} for {page:X}");
+                }
+                WritePhys(physPage + (vaddr + i - page), data[i]);
+            }
+        }
+
+        public void Write<T>(uint vaddr, T[] value)
+        {
+            var size = (uint)Marshal.SizeOf<T>();
+            for (var i = 0U; i < value.Length; ++i)
+                Write(vaddr + size * i, value[i]);
+        }
+
+        public byte ReadPhys(uint paddr)
+        {
+            var blockNum = paddr >> 24;
+            var blockBase = blockNum << 24;
+            Debug.Assert(PhysBlocks[blockNum] != (byte*)0);
+            return PhysBlocks[blockNum][paddr - blockBase];
+        }
+
+        public void WritePhys(uint paddr, byte value)
+        {
+            //WriteLine($"Writing {value:X} to guest physical {paddr:X8}");
+            var blockNum = paddr >> 24;
+            var blockBase = blockNum << 24;
+            //WriteLine($"Physical block {blockNum} with base {blockBase:X}");
+            Debug.Assert(PhysBlocks[blockNum] != (byte*)0);
+            PhysBlocks[blockNum][paddr - blockBase] = value;
+        }
+
+        public void WritePhys(uint paddr, byte[] value)
+        {
+            for (var i = 0U; i < value.Length; ++i)
+                WritePhys(paddr + i, value[i]);
+        }
+    }
 }

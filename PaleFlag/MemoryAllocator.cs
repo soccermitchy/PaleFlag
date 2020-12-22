@@ -1,66 +1,75 @@
 ﻿using System.Collections.Generic;
 using System.Linq;
-using static System.Console;
 
-namespace PaleFlag {
-	public class MemoryAllocator {
-		public readonly Xbox Box;
-		
-		public readonly Dictionary<uint, uint> FreeList = new Dictionary<uint, uint>();
-		public readonly Dictionary<uint, uint> Allocated = new Dictionary<uint, uint>();
+namespace PaleFlag
+{
+    public class MemoryAllocator
+    {
+        public readonly Xbox Box;
 
-		public MemoryAllocator(Xbox box) => Box = box;
+        public readonly Dictionary<uint, uint> FreeList = new Dictionary<uint, uint>();
+        public readonly Dictionary<uint, uint> Allocated = new Dictionary<uint, uint>();
 
-		public uint Allocate(uint bytes) {
-			lock(this) {
-				KeyValuePair<uint, uint> block;
-				while(true) {
-					block = FreeList.FirstOrDefault(x => x.Value >= bytes);
-					if(block.Key == 0)
-						Expand();
-					else
-						break;
-				}
+        public MemoryAllocator(Xbox box) => Box = box;
 
-				FreeList.Remove(block.Key);
-				if(block.Value > bytes)
-					Add(block.Key + bytes, block.Value - bytes);
+        public uint Allocate(uint bytes)
+        {
+            lock (this)
+            {
+                KeyValuePair<uint, uint> block;
+                while (true)
+                {
+                    block = FreeList.FirstOrDefault(x => x.Value >= bytes);
+                    if (block.Key == 0)
+                        Expand();
+                    else
+                        break;
+                }
 
-				return block.Key;
-			}
-		}
+                FreeList.Remove(block.Key);
+                if (block.Value > bytes)
+                    Add(block.Key + bytes, block.Value - bytes);
 
-		public void Free(uint addr, uint? size = null) {
-			if(size == null)
-				size = Allocated[addr];
+                return block.Key;
+            }
+        }
 
-			Allocated.Remove(addr);
-			Add(addr, size.Value);
-		}
+        public void Free(uint addr, uint? size = null)
+        {
+            if (size == null)
+                size = Allocated[addr];
 
-		void Expand() {
-			// Expand by 8MB at a time
-			var virt = Box.PageManager.AllocVirtPages(2048);
-			var phys = Box.PageManager.AllocPhysPages(2048);
-			Box.Cpu.MapPages(virt, phys, 4096, true);
-			Add(virt, 2048 * 4096);
-		}
+            Allocated.Remove(addr);
+            Add(addr, size.Value);
+        }
 
-		void Add(uint addr, uint size) {
-			var existing = FreeList.FirstOrDefault(x => x.Key + x.Value == addr);
-			if(existing.Key != 0) {
-				FreeList.Remove(existing.Key);
-				addr = existing.Key;
-				size += existing.Value;
-			}
+        void Expand()
+        {
+            // Expand by 8MB at a time
+            var virt = Box.PageManager.AllocVirtPages(2048);
+            var phys = Box.PageManager.AllocPhysPages(2048);
+            Box.Cpu.MapPages(virt, phys, 4096, true);
+            Add(virt, 2048 * 4096);
+        }
 
-			existing = FreeList.FirstOrDefault(x => x.Key == addr + size);
-			if(existing.Key != 0) {
-				FreeList.Remove(existing.Key);
-				size += existing.Value;
-			}
+        void Add(uint addr, uint size)
+        {
+            var existing = FreeList.FirstOrDefault(x => x.Key + x.Value == addr);
+            if (existing.Key != 0)
+            {
+                FreeList.Remove(existing.Key);
+                addr = existing.Key;
+                size += existing.Value;
+            }
 
-			FreeList[addr] = size;
-		}
-	}
+            existing = FreeList.FirstOrDefault(x => x.Key == addr + size);
+            if (existing.Key != 0)
+            {
+                FreeList.Remove(existing.Key);
+                size += existing.Value;
+            }
+
+            FreeList[addr] = size;
+        }
+    }
 }
